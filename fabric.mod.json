@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "koteclient",
+  "version": "${version}",
+  "name": "Kote Client",
+  "description": "Visual HUD and menu. No cheats.",
+  "environment": "client",
+  "entrypoints": { "client": ["kote.client.KoteClient"] },
+  "depends": { "fabricloader": ">=0.18.0", "minecraft": "1.21.11", "fabric-api": "*" }
+}
