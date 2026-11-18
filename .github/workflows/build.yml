@@ -1,0 +1,71 @@
+name: Build Kote Client
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  mod:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Разложить файлы по папкам
+        run: |
+          mkdir -p src/main/java/kote/client src/main/resources/assets/koteclient/lang
+          for f in KoteClient KoteConfig KoteHud KoteScreen; do
+            [ -f "$f.java" ] && cp "$f.java" src/main/java/kote/client/ || true
+          done
+          [ -f en_us.json ] && cp en_us.json src/main/resources/assets/koteclient/lang/ || true
+          [ -f fabric.mod.json ] && cp fabric.mod.json src/main/resources/ || true
+          find src -type f
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.2.1"
+      - run: gradle build --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kote-mod
+          path: build/libs/kote-client-*[0-9].jar
+
+  launcher:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install minecraft-launcher-lib pyinstaller
+      - run: python -m PyInstaller --onefile --windowed --name KoteLauncher launcher.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kote-launcher
+          path: dist/KoteLauncher.exe
+
+  package:
+    needs: [mod, launcher]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: kote-launcher
+          path: launcher
+        continue-on-error: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: kote-mod
+          path: mod
+        continue-on-error: true
+      - run: |
+          mkdir -p KoteClient/mods
+          cp launcher/KoteLauncher.exe KoteClient/ || true
+          cp mod/*.jar KoteClient/mods/ || true
+          ls -R KoteClient
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KoteClient
+          path: KoteClient
