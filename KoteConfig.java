@@ -88,10 +88,15 @@ public class KoteConfig {
     public static final Mod DIRECTION = add("direction", "Направление", "ИНФО", false).desc("Сторона света");
     public static final Mod SPEED = add("speed", "Скорость", "ИНФО", false).desc("Блоков в секунду");
     public static final Mod CPS = add("cps", "CPS", "ИНФО", true).desc("Клики мышью в секунду");
+    public static final Mod NETHER = add("nether", "Координаты Незера", "ИНФО", false).desc("X и Z, делённые на 8");
+    public static final Mod RAM = add("ram", "Память", "ИНФО", false).desc("Занято ОЗУ игрой");
+    public static final Mod SERVER = add("server", "Сервер", "ИНФО", false).desc("Адрес текущего сервера");
     // ИГРОК
     public static final Mod KEYS = add("keys", "Клавиши", "ИГРОК", true).desc("WASD, пробел, мышь");
     public static final Mod ARMOR = add("armor", "Броня", "ИГРОК", true).desc("Броня и прочность");
     public static final Mod EFFECTS = add("effects", "Эффекты", "ИГРОК", true).desc("Список эффектов");
+    public static final Mod ITEMS = add("items", "Счётчик предметов", "ИГРОК", false).desc("Тотемы, яблоки, жемчуг");
+    public static final Mod HELD = add("held", "Прочность в руке", "ИГРОК", false).desc("Прочность предмета в руке");
     public static final Mod ZOOM = add("zoom", "Зум (C)", "ИГРОК", true).desc("Приближение на кнопку C")
             .slider("fov", "Угол", 30, 60, 30);
     // ВИЗУАЛ
