@@ -6,6 +6,7 @@ import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.EntityHitResult;
 
 import java.time.LocalTime;
@@ -101,12 +102,25 @@ public class KoteHud {
             info.add(String.format("XYZ  %d  %d  %d", (int) Math.floor(mc.player.getX()),
                     (int) Math.floor(mc.player.getY()), (int) Math.floor(mc.player.getZ())));
         }
+        if (KoteConfig.NETHER.enabled) {
+            info.add(String.format("Незер  %d  %d", (int) Math.floor(mc.player.getX() / 8.0),
+                    (int) Math.floor(mc.player.getZ() / 8.0)));
+        }
         if (KoteConfig.DIRECTION.enabled) info.add("Куда  " + dirName(mc.player.getDirection().getSerializedName()));
         if (KoteConfig.SPEED.enabled) {
             var v = mc.player.getDeltaMovement();
             info.add(String.format("Скорость  %.1f б/с", Math.sqrt(v.x * v.x + v.z * v.z) * 20.0));
         }
         if (KoteConfig.CPS.enabled) info.add("CPS  " + lcps + " | " + rcps);
+        if (KoteConfig.RAM.enabled) {
+            Runtime rt = Runtime.getRuntime();
+            long used = (rt.totalMemory() - rt.freeMemory()) / 1048576L;
+            info.add("ОЗУ  " + used + " / " + (rt.maxMemory() / 1048576L) + " МБ");
+        }
+        if (KoteConfig.SERVER.enabled) {
+            var sd = mc.getCurrentServer();
+            info.add("Сервер  " + (sd != null ? sd.ip : "одиночная игра"));
+        }
         int belowY = infoY;
         if (!info.isEmpty()) {
             int w = 0;
@@ -150,10 +164,42 @@ public class KoteHud {
             key(g, mc, kx, ky + 66, 68, "ПРОБЕЛ", mc.options.keyJump.isDown());
         }
 
+        // ---- Счётчик предметов ----
+        if (KoteConfig.ITEMS.enabled) {
+            net.minecraft.world.item.Item[] tracked = {Items.TOTEM_OF_UNDYING, Items.GOLDEN_APPLE, Items.ENDER_PEARL};
+            int iy = g.guiHeight() / 2 + 74;
+            for (net.minecraft.world.item.Item it : tracked) {
+                int count = 0;
+                var inv = mc.player.getInventory();
+                for (int i = 0; i < inv.getContainerSize(); i++) {
+                    ItemStack s = inv.getItem(i);
+                    if (s.is(it)) count += s.getCount();
+                }
+                g.fill(6, iy, 52, iy + 18, PANEL);
+                g.fill(6, iy, 8, iy + 18, accent);
+                g.renderItem(new ItemStack(it), 10, iy + 1);
+                g.drawString(mc.font, "x" + count, 30, iy + 5, count > 0 ? WHITE : 0xFFFF5252, true);
+                iy += 20;
+            }
+        }
+
+        // ---- Прочность предмета в руке ----
+        if (KoteConfig.HELD.enabled) {
+            ItemStack hand = mc.player.getMainHandItem();
+            if (hand.isDamageableItem()) {
+                int left2 = hand.getMaxDamage() - hand.getDamageValue();
+                String t = "Прочность: " + left2 + " / " + hand.getMaxDamage();
+                int tw = mc.font.width(t) + 10;
+                int hx = g.guiWidth() / 2 - tw / 2, hy = g.guiHeight() - 72;
+                card(g, hx, hy, tw, 13, accent);
+                g.drawString(mc.font, t, hx + 5, hy + 3, WHITE, true);
+            }
+        }
+
         // ---- Панель цели ----
         if (KoteConfig.TARGET.enabled && mc.hitResult instanceof EntityHitResult ehr
                 && ehr.getEntity() instanceof LivingEntity target) {
-            int pw = 132, ph = 44;
+            int pw = 136, ph = 72;
             int px = g.guiWidth() / 2 + 14, py = g.guiHeight() / 2 + 14;
             card(g, px, py, pw, ph, accent);
             g.drawString(mc.font, target.getName().getString(), px + 7, py + 5, accent, true);
@@ -164,6 +210,21 @@ public class KoteHud {
             g.fill(px + 7, py + 17, px + 7 + (int) ((pw - 14) * ratio), py + 23, barColor);
             g.drawString(mc.font, String.format("%.1f / %.0f   %.1f м", hp, maxHp, mc.player.distanceTo(target)),
                     px + 7, py + 28, WHITE, true);
+
+            // броня цели и её прочность
+            EquipmentSlot[] tslots = {EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET};
+            for (int i = 0; i < tslots.length; i++) {
+                ItemStack st = target.getItemBySlot(tslots[i]);
+                if (st.isEmpty()) continue;
+                int ix = px + 8 + i * 31;
+                g.renderItem(st, ix, py + 41);
+                if (st.isDamageableItem()) {
+                    int pct = 100 * (st.getMaxDamage() - st.getDamageValue()) / Math.max(1, st.getMaxDamage());
+                    String t = pct + "%";
+                    int col = pct > 50 ? WHITE : pct > 25 ? 0xFFFFD54F : 0xFFFF5252;
+                    g.drawString(mc.font, t, ix + 8 - mc.font.width(t) / 2, py + 60, col, true);
+                }
+            }
         }
 
         // ---- Список модулей справа (с выезжающей анимацией) ----

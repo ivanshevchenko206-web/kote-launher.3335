@@ -1,4 +1,4 @@
-import sys, json, os, shutil, subprocess, threading, traceback, urllib.parse, urllib.request, uuid, datetime
+import sys, json, os, shutil, math, struct, zlib, zipfile, subprocess, threading, traceback, urllib.parse, urllib.request, uuid, datetime
 import tkinter as tk
 from tkinter import ttk
 import minecraft_launcher_lib as mll
@@ -14,7 +14,7 @@ OPT_MODS = ["fabric-api", "sodium", "lithium", "ferrite-core", "immediatelyfast"
 BG, CARD, FIELD = "#0f0b1a", "#181228", "#241b3a"
 TXT, MUTED, ACCENT, ACCENT_HOVER = "#e8e0f8", "#8d82a8", "#b388ff", "#c9a8ff"
 BTN, BTN_HOVER = "#7c4dff", "#9468ff"
-DEFAULTS = {"nick": "Player", "ram": 4, "server": ""}
+DEFAULTS = {"nick": "Player", "ram": 4, "server": "", "shaders": False, "sky": False}
 
 
 def load_cfg():
@@ -51,12 +51,106 @@ def open_folder(path):
         subprocess.Popen(["xdg-open", path])
 
 
+# ---------- Неоновое небо: ресурспак из кода (без внешних файлов) ----------
+PACK_NAME = "KoteSky.zip"
+
+
+def png_bytes(w, h, rows):
+    raw = b"".join(b"\x00" + bytes(row) for row in rows)
+
+    def chunk(tag, data):
+        body = tag + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
+
+
+def sun_png():
+    size, c = 32, 15.5
+    rows = []
+    for y in range(size):
+        row = []
+        for x in range(size):
+            r = math.hypot(x - c, y - c)
+            if r < 9:
+                t = r / 9
+                row += [255, int(90 + 70 * (1 - t)), int(190 - 60 * (1 - t)), 255]  # розово-оранжевое ядро
+            elif r < 15.5:
+                a = int(255 * (1 - (r - 9) / 6.5) ** 2)
+                row += [255, 70, 200, max(0, a)]  # неоновое свечение
+            else:
+                row += [0, 0, 0, 0]
+        rows.append(row)
+    return png_bytes(size, size, rows)
+
+
+def moon_png():
+    cell, cols, rows_n = 32, 4, 2
+    lit = [1.0, 0.75, 0.5, 0.25, 0.0, 0.25, 0.5, 0.75]
+    img = [[0, 0, 0, 0] * (cell * cols) for _ in range(cell * rows_n)]
+    c, rad = 15.5, 10.5
+    for k in range(8):
+        ox, oy = (k % cols) * cell, (k // cols) * cell
+        waning = k < 4
+        for y in range(cell):
+            for x in range(cell):
+                r = math.hypot(x - c, y - c)
+                if r > 15.5:
+                    continue
+                if r <= rad:
+                    nx = (x - c) / rad
+                    thr = 1 - 2 * lit[k]
+                    is_lit = lit[k] >= 1.0 or (lit[k] > 0 and (nx <= -thr if waning else nx >= thr))
+                    px = [170, 240, 255, 255] if is_lit else [30, 42, 68, 150]
+                else:
+                    a = int(150 * (1 - (r - rad) / (15.5 - rad)) ** 2)
+                    px = [60, 220, 255, a]  # неоновое свечение
+                img[oy + y][(ox + x) * 4:(ox + x) * 4 + 4] = px
+    return png_bytes(cell * cols, cell * rows_n, img)
+
+
+def build_sky_pack(game_dir):
+    pack_dir = os.path.join(game_dir, "resourcepacks")
+    os.makedirs(pack_dir, exist_ok=True)
+    path = os.path.join(pack_dir, PACK_NAME)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("pack.mcmeta", json.dumps({"pack": {"description": "Kote Client: неоновое небо", "pack_format": 75}}))
+        z.writestr("assets/minecraft/textures/environment/sun.png", sun_png())
+        z.writestr("assets/minecraft/textures/environment/moon_phases.png", moon_png())
+
+
+def set_pack_enabled(game_dir, enabled):
+    opt = os.path.join(game_dir, "options.txt")
+    entry = "file/" + PACK_NAME
+    lines = []
+    if os.path.exists(opt):
+        with open(opt, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    found = False
+    for i, ln in enumerate(lines):
+        if ln.startswith("resourcePacks:"):
+            found = True
+            try:
+                packs = json.loads(ln[len("resourcePacks:"):])
+            except Exception:
+                packs = ["vanilla"]
+            packs = [p for p in packs if p != entry]
+            if enabled:
+                packs.append(entry)
+            lines[i] = "resourcePacks:" + json.dumps(packs)
+    if not found and enabled:
+        lines.append("resourcePacks:" + json.dumps(["vanilla", entry]))
+    with open(opt, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
 class Launcher:
     def __init__(self):
         self.cfg = load_cfg()
         self.root = tk.Tk()
         self.root.title("Kote Client Launcher")
-        self.root.geometry("520x640")
+        self.root.geometry("520x710")
         self.root.resizable(False, False)
         self.root.configure(bg=BG)
         self.running = False
@@ -107,7 +201,15 @@ class Launcher:
                             bg=CARD, fg=TXT, troughcolor=FIELD, activebackground=ACCENT, highlightthickness=0,
                             sliderrelief="flat", command=lambda v: self.ram_label.config(text=f"{int(float(v))} ГБ"))
         self.ram.set(int(self.cfg["ram"]))
-        self.ram.pack(fill="x", padx=18, pady=(0, 14))
+        self.ram.pack(fill="x", padx=18, pady=(0, 6))
+        self.shaders = tk.BooleanVar(value=bool(self.cfg.get("shaders", False)))
+        tk.Checkbutton(card, text="Шейдеры (Iris + Complementary), нужен мощный ПК", variable=self.shaders,
+                       bg=CARD, fg=TXT, selectcolor=FIELD, activebackground=CARD, activeforeground=TXT,
+                       bd=0, highlightthickness=0, font=("Segoe UI", 9)).pack(anchor="w", padx=14, pady=(0, 2))
+        self.sky = tk.BooleanVar(value=bool(self.cfg.get("sky", False)))
+        tk.Checkbutton(card, text="Неоновое небо (свой пак: солнце и луна)", variable=self.sky,
+                       bg=CARD, fg=TXT, selectcolor=FIELD, activebackground=CARD, activeforeground=TXT,
+                       bd=0, highlightthickness=0, font=("Segoe UI", 9)).pack(anchor="w", padx=14, pady=(0, 12))
 
         # progress
         st = ttk.Style(); st.theme_use("clam")
@@ -162,7 +264,8 @@ class Launcher:
             return
         nick = "".join(c for c in self.nick.get().strip() if c.isalnum() or c == "_")[:16] or "Player"
         self.nick.set(nick)
-        self.cfg = {"nick": nick, "ram": int(self.ram.get()), "server": self.server.get().strip()}
+        self.cfg = {"nick": nick, "ram": int(self.ram.get()), "server": self.server.get().strip(),
+                    "shaders": bool(self.shaders.get()), "sky": bool(self.sky.get())}
         save_cfg(self.cfg)
         self.running = True
         self.play_btn.config(state="disabled", text="ЗАПУСК...", bg=FIELD)
@@ -183,24 +286,32 @@ class Launcher:
                 "setMax": set_max,
                 "setProgress": lambda p: self.set_progress(p, state["max"])}
 
+    def download_modrinth(self, slug, loaders, dest):
+        os.makedirs(dest, exist_ok=True)
+        q = urllib.parse.urlencode({"game_versions": json.dumps([MC_VERSION]),
+                                    "loaders": json.dumps(loaders)})
+        req = urllib.request.Request(f"https://api.modrinth.com/v2/project/{slug}/version?{q}",
+                                     headers={"User-Agent": "KoteLauncher/0.3"})
+        versions = json.load(urllib.request.urlopen(req, timeout=25))
+        if not versions:
+            self.log(f"{slug}: нет версии для {MC_VERSION}, пропускаю")
+            return
+        f = next((x for x in versions[0]["files"] if x.get("primary")), versions[0]["files"][0])
+        path = os.path.join(dest, f["filename"])
+        if not os.path.exists(path):
+            self.log(f"Скачиваю {slug}")
+            urllib.request.urlretrieve(f["url"], path)
+
     def download_opt_mods(self):
         mods_dir = os.path.join(GAME_DIR, "mods")
-        os.makedirs(mods_dir, exist_ok=True)
-        for i, slug in enumerate(OPT_MODS, 1):
-            self.set_status(f"Моды: {slug} ({i}/{len(OPT_MODS)})")
+        items = [(slug, ["fabric"], mods_dir) for slug in OPT_MODS]
+        if self.cfg.get("shaders"):
+            items.append(("iris", ["fabric"], mods_dir))
+            items.append(("complementary-reimagined", ["iris"], os.path.join(GAME_DIR, "shaderpacks")))
+        for i, (slug, loaders, dest) in enumerate(items, 1):
+            self.set_status(f"Моды: {slug} ({i}/{len(items)})")
             try:
-                q = urllib.parse.urlencode({"game_versions": json.dumps([MC_VERSION]),
-                                            "loaders": json.dumps(["fabric"])})
-                req = urllib.request.Request(f"https://api.modrinth.com/v2/project/{slug}/version?{q}",
-                                             headers={"User-Agent": "KoteLauncher/0.2"})
-                versions = json.load(urllib.request.urlopen(req, timeout=25))
-                if not versions:
-                    self.log(f"{slug}: нет версии для {MC_VERSION}, пропускаю"); continue
-                f = next((x for x in versions[0]["files"] if x.get("primary")), versions[0]["files"][0])
-                path = os.path.join(mods_dir, f["filename"])
-                if not os.path.exists(path):
-                    self.log(f"Скачиваю {slug}")
-                    urllib.request.urlretrieve(f["url"], path)
+                self.download_modrinth(slug, loaders, dest)
             except Exception as e:
                 self.log(f"{slug}: не скачался ({e})")
 
@@ -228,12 +339,28 @@ class Launcher:
             ram = self.cfg["ram"]
 
             # 1) Java. Нужна уже для установки Fabric, поэтому первой.
-            self.set_status("Ставлю Java 21...")
-            self.log("Java 21: установка (в первый раз долго)")
-            mll.runtime.install_jvm_runtime("java-runtime-delta", GAME_DIR, callback=cb)
-            java_exe = mll.runtime.get_executable_path("java-runtime-delta", GAME_DIR)
-            if not java_exe or not os.path.exists(java_exe):
-                raise RuntimeError(f"Java не найдена после установки: {java_exe}")
+            def find_java():
+                try:
+                    p = mll.runtime.get_executable_path("java-runtime-delta", GAME_DIR)
+                    return p if p and os.path.exists(p) else None
+                except Exception:
+                    return None
+
+            java_exe = find_java()
+            if java_exe:
+                self.log("Java 21 уже установлена, пропускаю")
+            else:
+                self.set_status("Ставлю Java 21...")
+                self.log("Java 21: установка (в первый раз долго)")
+                try:
+                    mll.runtime.install_jvm_runtime("java-runtime-delta", GAME_DIR, callback=cb)
+                except PermissionError as e:
+                    self.log(f"Java: нет доступа к файлу ({e}). Закрой Minecraft/Java и попробуй ещё раз")
+                    if not find_java():
+                        raise
+                java_exe = find_java()
+            if not java_exe:
+                raise RuntimeError("Java не найдена после установки")
             os.environ["PATH"] = os.path.dirname(java_exe) + os.pathsep + os.environ.get("PATH", "")
             self.log(f"Java: {java_exe}")
 
@@ -248,6 +375,13 @@ class Launcher:
             # 3) Моды
             self.download_opt_mods()
             self.copy_kote_mod()
+            try:
+                if self.cfg.get("sky"):
+                    build_sky_pack(GAME_DIR)
+                    self.log("Неоновое небо: пак создан")
+                set_pack_enabled(GAME_DIR, bool(self.cfg.get("sky")))
+            except Exception as e:
+                self.log(f"Небо: не вышло ({e})")
 
             # 4) Запуск
             opts = {"username": self.cfg["nick"],
